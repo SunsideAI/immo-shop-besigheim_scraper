@@ -1,0 +1,36 @@
+name: Scrape Besigheim Immobilien
+
+on:
+  schedule:
+    - cron: '0 8 * * *'  # 08:00 UTC (09:00 MEZ)
+  workflow_dispatch:
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Install Python dependencies
+        run: |
+          pip install requests beautifulsoup4 lxml
+      
+      - name: Run scraper
+        env:
+          AIRTABLE_TOKEN: ${{ secrets.BESIGHEIM_AIRTABLE_TOKEN }}
+          AIRTABLE_BASE: ${{ secrets.BESIGHEIM_AIRTABLE_BASE }}
+          AIRTABLE_TABLE_ID: ${{ secrets.BESIGHEIM_AIRTABLE_TABLE_ID }}
+        run: |
+          python besigheim_scraper.py
+      
+      - name: Upload CSV
+        uses: actions/upload-artifact@v4
+        with:
+          name: besigheim-immobilien
+          path: besigheim_immobilien.csv
