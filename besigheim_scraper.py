@@ -300,30 +300,78 @@ def extract_description(soup: BeautifulSoup) -> str:
 # ===========================================================================
 
 def collect_detail_links() -> List[str]:
-    """Sammle alle Detailseiten-Links"""
-    print(f"[LIST] Hole {LIST_URL}")
-    soup = soup_get(LIST_URL)
+    """Sammle alle Detailseiten-Links mit Pagination-Support"""
+    all_links = []
+    page = 1
     
-    links = []
-    
-    # Suche nach Links die zu Immobilien-Details führen
-    # Format: /immobilie/[slug]/
-    for a in soup.find_all("a", href=True):
-        href = a["href"]
-        if "/immobilie/" in href and href.count("/") >= 3:
-            # Ignoriere die Hauptseite
-            if href.strip("/") == "immobilie":
-                continue
-            
-            full_url = urljoin(BASE, href)
-            if full_url not in links and full_url != LIST_URL:
-                links.append(full_url)
+    while True:
+        # Erste Seite: /immobilienangebote/
+        # Weitere Seiten: /immobilienangebote/page/2/, /immobilienangebote/page/3/, etc.
+        if page == 1:
+            page_url = LIST_URL
+        else:
+            page_url = f"{LIST_URL}page/{page}/"
+        
+        print(f"[LIST] Hole Seite {page}: {page_url}")
+        
+        try:
+            soup = soup_get(page_url)
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 404:
+                print(f"[LIST] Seite {page} nicht gefunden - Ende der Pagination")
+                break
+            raise
+        
+        # Zähle gefundene Links auf dieser Seite
+        page_links = []
+        
+        # Suche nach Links die zu Immobilien-Details führen
+        # Format: /immobilie/[slug]/
+        for a in soup.find_all("a", href=True):
+            href = a["href"]
+            if "/immobilie/" in href and href.count("/") >= 3:
+                # Ignoriere die Hauptseite
+                if href.strip("/") == "immobilie":
+                    continue
+                
+                full_url = urljoin(BASE, href)
+                if full_url not in all_links and full_url != LIST_URL:
+                    all_links.append(full_url)
+                    page_links.append(full_url)
+        
+        print(f"[LIST] Seite {page}: {len(page_links)} neue Immobilien gefunden")
+        
+        # Wenn weniger als 12 Links gefunden wurden, sind wir wahrscheinlich auf der letzten Seite
+        # Wenn keine Links gefunden wurden, abbrechen
+        if len(page_links) == 0:
+            print(f"[LIST] Keine neuen Links auf Seite {page} - Ende der Pagination")
+            break
+        
+        # Prüfe ob es eine nächste Seite gibt
+        # Suche nach "Next" Link oder Seitenzahl-Links
+        has_next_page = False
+        for a in soup.find_all("a", href=True):
+            href = a["href"]
+            if f"/page/{page + 1}/" in href or "next" in href.lower():
+                has_next_page = True
+                break
+        
+        if not has_next_page and len(page_links) < 12:
+            print(f"[LIST] Weniger als 12 Links und kein 'Next' Link - letzte Seite erreicht")
+            break
+        
+        page += 1
+        
+        # Sicherheits-Break nach 20 Seiten
+        if page > 20:
+            print(f"[WARN] Sicherheits-Break bei Seite 20 - mehr als 240 Immobilien unwahrscheinlich")
+            break
     
     # Dedupliziere (manche Links kommen mehrfach vor)
-    links = list(dict.fromkeys(links))
+    all_links = list(dict.fromkeys(all_links))
     
-    print(f"[LIST] Gefunden: {len(links)} Immobilien")
-    return links
+    print(f"[LIST] Gesamt gefunden: {len(all_links)} Immobilien über {page} Seite(n)")
+    return all_links
 
 def parse_detail(detail_url: str) -> dict:
     """Parse Detailseite"""
