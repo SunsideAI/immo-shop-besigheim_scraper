@@ -12,6 +12,7 @@ import sys
 import csv
 import json
 import time
+import urllib.parse
 from urllib.parse import urljoin, urlparse
 from typing import List, Dict, Optional
 
@@ -399,15 +400,57 @@ def parse_detail(detail_url: str) -> dict:
     # PLZ/Ort - bei Besigheim oft nur Ortsname
     ort = extract_plz_ort(page_text, title)
     
-    # Bild-URL - erstes Bild
+    # Bild-URL - erstes Property-Bild (nicht Logo)
     image_url = ""
+    
+    # Methode 1: Suche in srcset (phastpress optimierte Bilder)
     for img in soup.find_all("img"):
-        src = img.get("src", "")
-        if src and ("/wp-content/uploads/" in src or "phastpress" in src):
-            # Ignoriere Logos
-            if "logo" not in src.lower():
-                image_url = src if src.startswith("http") else urljoin(BASE, src)
+        srcset = img.get("srcset", "")
+        if srcset and "wp-content/uploads" in srcset:
+            # Parse srcset: "url1 1920w, url2 768w, ..."
+            # Nimm die größte Auflösung (höchste w-Zahl)
+            urls = []
+            for part in srcset.split(","):
+                part = part.strip()
+                if " " in part:
+                    url_part = part.split()[0]
+                    if "logo" not in url_part.lower():
+                        urls.append(url_part)
+            
+            if urls:
+                # Nimm erste URL (meist höchste Auflösung)
+                image_url = urls[0] if urls[0].startswith("http") else urljoin(BASE, urls[0])
+                print(f"[DEBUG] Found image in srcset: {image_url[:80]}...")
                 break
+    
+    # Methode 2: Fallback zu src Attribut
+    if not image_url:
+        for img in soup.find_all("img"):
+            src = img.get("src", "")
+            if src and "/wp-content/uploads/" in src:
+                # Ignoriere Logos und kleine Icons
+                if "logo" not in src.lower():
+                    # Dekodiere phastpress URL falls nötig
+                    if "phastpress" in src:
+                        # Extrahiere die echte URL aus dem phastpress Path
+                        import urllib.parse
+                        if "src=" in src:
+                            try:
+                                decoded = urllib.parse.unquote(src)
+                                match = re.search(r'src=(https?://[^&]+)', decoded)
+                                if match:
+                                    image_url = match.group(1)
+                            except:
+                                pass
+                    else:
+                        image_url = src if src.startswith("http") else urljoin(BASE, src)
+                    
+                    if image_url:
+                        print(f"[DEBUG] Found image in src: {image_url[:80]}...")
+                        break
+    
+    if not image_url:
+        print(f"[DEBUG] No suitable image found for {detail_url}")
     
     # Kategorie - immo-shop-besigheim hat nur Kaufangebote
     kategorie = "Kaufen"
