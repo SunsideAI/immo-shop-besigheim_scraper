@@ -301,14 +301,12 @@ def extract_description(soup: BeautifulSoup) -> str:
 # SCRAPING FUNCTIONS
 # ===========================================================================
 
-def collect_detail_links() -> List[str]:
-    """Sammle alle Detailseiten-Links mit Pagination-Support"""
-    all_links = []
+def collect_detail_links_with_images() -> List[tuple]:
+    """Sammle alle Detailseiten-Links MIT Bildern von der Übersichtsseite"""
+    all_data = []
     page = 1
     
     while True:
-        # Erste Seite: /immobilienangebote/
-        # Weitere Seiten: /immobilienangebote/page/2/, /immobilienangebote/page/3/, etc.
         if page == 1:
             page_url = LIST_URL
         else:
@@ -324,33 +322,56 @@ def collect_detail_links() -> List[str]:
                 break
             raise
         
-        # Zähle gefundene Links auf dieser Seite
-        page_links = []
+        page_data = []
         
-        # Suche nach Links die zu Immobilien-Details führen
-        # Format: /immobilie/[slug]/
-        for a in soup.find_all("a", href=True):
-            href = a["href"]
+        # Suche nach Immobilien-Karten auf der Übersichtsseite
+        # Jede Immobilie hat einen Link UND ein Bild
+        for link in soup.find_all("a", href=True):
+            href = link["href"]
             if "/immobilie/" in href and href.count("/") >= 3:
-                # Ignoriere die Hauptseite
                 if href.strip("/") == "immobilie":
                     continue
                 
                 full_url = urljoin(BASE, href)
-                if full_url not in all_links and full_url != LIST_URL:
-                    all_links.append(full_url)
-                    page_links.append(full_url)
+                
+                # Suche nach Bild innerhalb des gleichen Link-Elements oder Parent
+                img = link.find("img")
+                if not img:
+                    # Prüfe Parent-Element
+                    parent = link.parent
+                    if parent:
+                        img = parent.find("img")
+                
+                image_url = ""
+                if img:
+                    # Hole srcset (bevorzugt) oder src
+                    srcset = img.get("srcset", "")
+                    if srcset:
+                        # Parse srcset und nimm größtes Bild
+                        for part in srcset.split(","):
+                            part = part.strip()
+                            if " " in part:
+                                url_part = part.split()[0]
+                                image_url = url_part if url_part.startswith("http") else urljoin(BASE, url_part)
+                                break
+                    
+                    if not image_url:
+                        src = img.get("src", "")
+                        if src:
+                            image_url = src if src.startswith("http") else urljoin(BASE, src)
+                
+                # Nur hinzufügen wenn noch nicht vorhanden
+                if not any(data[0] == full_url for data in all_data):
+                    all_data.append((full_url, image_url))
+                    page_data.append(full_url)
         
-        print(f"[LIST] Seite {page}: {len(page_links)} neue Immobilien gefunden")
+        print(f"[LIST] Seite {page}: {len(page_data)} neue Immobilien gefunden")
         
-        # Wenn weniger als 12 Links gefunden wurden, sind wir wahrscheinlich auf der letzten Seite
-        # Wenn keine Links gefunden wurden, abbrechen
-        if len(page_links) == 0:
+        if len(page_data) == 0:
             print(f"[LIST] Keine neuen Links auf Seite {page} - Ende der Pagination")
             break
         
         # Prüfe ob es eine nächste Seite gibt
-        # Suche nach "Next" Link oder Seitenzahl-Links
         has_next_page = False
         for a in soup.find_all("a", href=True):
             href = a["href"]
@@ -358,24 +379,20 @@ def collect_detail_links() -> List[str]:
                 has_next_page = True
                 break
         
-        if not has_next_page and len(page_links) < 12:
+        if not has_next_page and len(page_data) < 12:
             print(f"[LIST] Weniger als 12 Links und kein 'Next' Link - letzte Seite erreicht")
             break
         
         page += 1
         
-        # Sicherheits-Break nach 20 Seiten
         if page > 20:
-            print(f"[WARN] Sicherheits-Break bei Seite 20 - mehr als 240 Immobilien unwahrscheinlich")
+            print(f"[WARN] Sicherheits-Break bei Seite 20")
             break
     
-    # Dedupliziere (manche Links kommen mehrfach vor)
-    all_links = list(dict.fromkeys(all_links))
-    
-    print(f"[LIST] Gesamt gefunden: {len(all_links)} Immobilien über {page} Seite(n)")
-    return all_links
+    print(f"[LIST] Gesamt gefunden: {len(all_data)} Immobilien über {page} Seite(n)")
+    return all_data
 
-def parse_detail(detail_url: str) -> dict:
+def parse_detail(detail_url: str, overview_image: str = "") -> dict:
     """Parse Detailseite"""
     soup = soup_get(detail_url)
     page_text = soup.get_text("\n", strip=True)
@@ -404,69 +421,36 @@ def parse_detail(detail_url: str) -> dict:
     # Bild-URL - erstes Property-Bild (nicht Logo)
     image_url = ""
     
-    # Phastpress verschlüsselt URLs in Base64
-    # Format: /phastpress/phast.php/BASE64_ENCODED_DATA
-    # Dekodiert enthält es die echte URL
-    
-    import base64
-    
     for img in soup.find_all("img"):
         src = img.get("src", "")
-        alt = img.get("alt", "")
-        width = img.get("width", "")
+        srcset = img.get("srcset", "")
+        alt = img.get("alt", "").lower()
         
-        # Filtere unwichtige Bilder
+        # Verwende srcset falls vorhanden (bessere Qualität)
+        if srcset:
+            # srcset Format: "url1 width1, url2 width2, ..."
+            # Nimm die größte Auflösung (letzte)
+            srcset_urls = [s.strip().split()[0] for s in srcset.split(",")]
+            if srcset_urls:
+                src = srcset_urls[-1]  # Größtes Bild
+        
         if not src:
             continue
         
-        # Ignoriere sehr kleine Bilder (Icons, Logos)
-        try:
-            if width and int(width) < 200:
-                continue
-        except:
-            pass
+        # Ignoriere Logos, Icons, Avatare
+        skip_keywords = ["logo", "icon", "avatar", "favicon"]
+        if any(keyword in alt for keyword in skip_keywords):
+            continue
+        if any(keyword in src.lower() for keyword in skip_keywords):
+            continue
         
-        # Prüfe ob es ein phastpress-Link ist
-        if "phastpress/phast.php" in src:
-            # Extrahiere Base64-Teil
-            parts = src.split("/phast.php/")
-            if len(parts) > 1:
-                encoded = parts[1]
-                # Entferne Query-Parameter und Suffix wie .q.jpg
-                encoded = encoded.split("?")[0]
-                encoded = re.sub(r'\.(q|webp|jpg|jpeg|png)$', '', encoded, flags=re.IGNORECASE)
-                
-                try:
-                    # Dekodiere Base64
-                    # Füge Padding hinzu falls nötig
-                    missing_padding = len(encoded) % 4
-                    if missing_padding:
-                        encoded += '=' * (4 - missing_padding)
-                    
-                    decoded = base64.b64decode(encoded).decode('utf-8')
-                    
-                    # Suche nach der echten URL im dekodierten String
-                    # Format: "service=images&src=https%3A%2F%2Fwww.immo-shop-besigheim.de%2Fwp-content%2Fuploads%2F..."
-                    if "src=" in decoded:
-                        import urllib.parse
-                        match = re.search(r'src=([^&]+)', decoded)
-                        if match:
-                            encoded_url = match.group(1)
-                            real_url = urllib.parse.unquote(encoded_url)
-                            
-                            # Prüfe ob es ein Property-Bild ist
-                            if "wp-content/uploads" in real_url and "logo" not in real_url.lower():
-                                image_url = real_url
-                                print(f"[DEBUG] Found image (decoded): {image_url[:80]}...")
-                                break
-                except Exception as e:
-                    print(f"[DEBUG] Failed to decode phastpress URL: {e}")
-                    continue
-        
-        # Fallback: Direkte wp-content URLs (falls phastpress deaktiviert)
-        elif "wp-content/uploads" in src and "logo" not in src.lower():
+        # Akzeptiere Bilder die Property-Bilder sein könnten
+        # phastpress-optimierte Bilder oder direkte wp-content URLs
+        if any(indicator in src for indicator in ["/wp-content/uploads/", "phastpress", "phast.php"]):
+            # Verwende die URL wie sie ist (auch wenn phastpress-encodiert)
+            # Der Browser kann sie trotzdem anzeigen
             image_url = src if src.startswith("http") else urljoin(BASE, src)
-            print(f"[DEBUG] Found image (direct): {image_url[:80]}...")
+            print(f"[DEBUG] Found image: {image_url[:100]}...")
             break
     
     if not image_url:
