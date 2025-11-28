@@ -418,40 +418,40 @@ def parse_detail(detail_url: str, overview_image: str = "") -> dict:
     # PLZ/Ort - bei Besigheim oft nur Ortsname
     ort = extract_plz_ort(page_text, title)
     
-    # Bild-URL - erstes Property-Bild (nicht Logo)
-    image_url = ""
+    # Bild-URL - verwende Bild von Übersichtsseite falls vorhanden
+    image_url = overview_image if overview_image else ""
     
-    for img in soup.find_all("img"):
-        src = img.get("src", "")
-        srcset = img.get("srcset", "")
-        alt = img.get("alt", "").lower()
-        
-        # Verwende srcset falls vorhanden (bessere Qualität)
-        if srcset:
-            # srcset Format: "url1 width1, url2 width2, ..."
-            # Nimm die größte Auflösung (letzte)
-            srcset_urls = [s.strip().split()[0] for s in srcset.split(",")]
-            if srcset_urls:
-                src = srcset_urls[-1]  # Größtes Bild
-        
-        if not src:
-            continue
-        
-        # Ignoriere Logos, Icons, Avatare
-        skip_keywords = ["logo", "icon", "avatar", "favicon"]
-        if any(keyword in alt for keyword in skip_keywords):
-            continue
-        if any(keyword in src.lower() for keyword in skip_keywords):
-            continue
-        
-        # Akzeptiere Bilder die Property-Bilder sein könnten
-        # phastpress-optimierte Bilder oder direkte wp-content URLs
-        if any(indicator in src for indicator in ["/wp-content/uploads/", "phastpress", "phast.php"]):
-            # Verwende die URL wie sie ist (auch wenn phastpress-encodiert)
-            # Der Browser kann sie trotzdem anzeigen
-            image_url = src if src.startswith("http") else urljoin(BASE, src)
-            print(f"[DEBUG] Found image: {image_url[:100]}...")
-            break
+    # Nur wenn kein Bild von Übersichtsseite, suche auf Detailseite
+    if not image_url:
+        print(f"[DEBUG] No overview image, searching on detail page...")
+        for img in soup.find_all("img"):
+            src = img.get("src", "")
+            srcset = img.get("srcset", "")
+            alt = img.get("alt", "").lower()
+            
+            # Verwende srcset falls vorhanden (bessere Qualität)
+            if srcset:
+                srcset_urls = [s.strip().split()[0] for s in srcset.split(",")]
+                if srcset_urls:
+                    src = srcset_urls[-1]  # Größtes Bild
+            
+            if not src:
+                continue
+            
+            # Ignoriere Logos, Icons, Avatare
+            skip_keywords = ["logo", "icon", "avatar", "favicon"]
+            if any(keyword in alt for keyword in skip_keywords):
+                continue
+            if any(keyword in src.lower() for keyword in skip_keywords):
+                continue
+            
+            # Akzeptiere Bilder die Property-Bilder sein könnten
+            if any(indicator in src for indicator in ["/wp-content/uploads/", "phastpress", "phast.php"]):
+                image_url = src if src.startswith("http") else urljoin(BASE, src)
+                print(f"[DEBUG] Found image on detail page: {image_url[:100]}...")
+                break
+    else:
+        print(f"[DEBUG] Using overview image: {image_url[:100]}...")
     
     if not image_url:
         print(f"[DEBUG] No suitable image found for {detail_url}")
@@ -512,24 +512,25 @@ def run():
     """Hauptfunktion"""
     print("[BESIGHEIM] Starte Scraper für immo-shop-besigheim.de")
     
-    # Sammle Links
-    detail_links = collect_detail_links()
+    # Sammle Links MIT Bildern von Übersichtsseite
+    detail_data = collect_detail_links_with_images()
     
-    if not detail_links:
+    if not detail_data:
         print("[WARN] Keine Links gefunden!")
         return
     
     # Scrape Details
     all_rows = []
-    for i, url in enumerate(detail_links, 1):
+    for i, (url, image_url) in enumerate(detail_data, 1):
         try:
-            print(f"\n[SCRAPE] {i}/{len(detail_links)} | {url}")
-            row = parse_detail(url)
+            print(f"\n[SCRAPE] {i}/{len(detail_data)} | {url}")
+            row = parse_detail(url, overview_image=image_url)
             record = make_record(row)
             
             # Zeige Vorschau
             preis_display = record.get('Preis', 'N/A')
-            print(f"  → {record['Kategorie']:8} | {record['Titel'][:60]} | {record.get('Standort', 'N/A')} | Preis: {preis_display}")
+            has_image = "✅" if record.get('Bild') else "❌"
+            print(f"  → {record['Kategorie']:8} | {record['Titel'][:60]} | {record.get('Standort', 'N/A')} | Preis: {preis_display} | Bild: {has_image}")
             
             all_rows.append(record)
         except Exception as e:
