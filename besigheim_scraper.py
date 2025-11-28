@@ -324,46 +324,52 @@ def collect_detail_links_with_images() -> List[tuple]:
         
         page_data = []
         
-        # Suche nach Immobilien-Karten auf der Übersichtsseite
-        # Jede Immobilie hat einen Link UND ein Bild
-        for link in soup.find_all("a", href=True):
+        # Suche nach Immobilien-Artikeln (frymo-listing-item)
+        # Struktur: <article><a href=...></a><div><img></div></article>
+        for article in soup.find_all("article", class_=lambda x: x and "frymo-listing-item" in x):
+            # Suche Link im Artikel
+            link = article.find("a", href=True)
+            if not link:
+                continue
+            
             href = link["href"]
-            if "/immobilie/" in href and href.count("/") >= 3:
-                if href.strip("/") == "immobilie":
-                    continue
+            if "/immobilie/" not in href or href.count("/") < 3:
+                continue
+            if href.strip("/") == "immobilie":
+                continue
+            
+            full_url = urljoin(BASE, href)
+            
+            # Suche Bild im gleichen Artikel (NICHT im Link!)
+            image_url = ""
+            img = article.find("img")
+            if img:
+                # Hole srcset (bevorzugt) oder src
+                srcset = img.get("srcset", "")
+                if srcset:
+                    # Parse srcset: "url1 768w, url2 1024w, url3 1920w"
+                    # Nimm größte Auflösung (letzter Eintrag)
+                    srcset_parts = [s.strip() for s in srcset.split(",")]
+                    if srcset_parts:
+                        last_part = srcset_parts[-1].strip()
+                        if " " in last_part:
+                            image_url = last_part.split()[0]
+                        else:
+                            image_url = last_part
                 
-                full_url = urljoin(BASE, href)
+                if not image_url:
+                    src = img.get("src", "")
+                    if src:
+                        image_url = src
                 
-                # Suche nach Bild innerhalb des gleichen Link-Elements oder Parent
-                img = link.find("img")
-                if not img:
-                    # Prüfe Parent-Element
-                    parent = link.parent
-                    if parent:
-                        img = parent.find("img")
-                
-                image_url = ""
-                if img:
-                    # Hole srcset (bevorzugt) oder src
-                    srcset = img.get("srcset", "")
-                    if srcset:
-                        # Parse srcset und nimm größtes Bild
-                        for part in srcset.split(","):
-                            part = part.strip()
-                            if " " in part:
-                                url_part = part.split()[0]
-                                image_url = url_part if url_part.startswith("http") else urljoin(BASE, url_part)
-                                break
-                    
-                    if not image_url:
-                        src = img.get("src", "")
-                        if src:
-                            image_url = src if src.startswith("http") else urljoin(BASE, src)
-                
-                # Nur hinzufügen wenn noch nicht vorhanden
-                if not any(data[0] == full_url for data in all_data):
-                    all_data.append((full_url, image_url))
-                    page_data.append(full_url)
+                # Mache URL absolut
+                if image_url and not image_url.startswith("http"):
+                    image_url = urljoin(BASE, image_url)
+            
+            # Nur hinzufügen wenn noch nicht vorhanden
+            if not any(data[0] == full_url for data in all_data):
+                all_data.append((full_url, image_url))
+                page_data.append(full_url)
         
         print(f"[LIST] Seite {page}: {len(page_data)} neue Immobilien gefunden")
         
