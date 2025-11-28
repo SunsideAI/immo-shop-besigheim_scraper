@@ -62,6 +62,52 @@ STOP_STRINGS = [
 # HELPER FUNCTIONS
 # ===========================================================================
 
+def decode_phastpress_url(phast_url: str) -> str:
+    """Dekodiere phastpress-URL um echte Bild-URL zu erhalten"""
+    if "phastpress/phast.php/" not in phast_url:
+        return phast_url
+    
+    try:
+        import base64
+        import urllib.parse
+        
+        # Extrahiere Base64-Teil
+        parts = phast_url.split("/phast.php/")
+        if len(parts) < 2:
+            return phast_url
+        
+        encoded = parts[1]
+        
+        # Entferne Dateiendung (.q.jpg, .jpg, etc.)
+        encoded = encoded.split(".q.jpg")[0]
+        encoded = encoded.split(".jpg")[0]
+        encoded = encoded.split(".jpeg")[0]
+        encoded = encoded.split(".png")[0]
+        encoded = encoded.split(".webp")[0]
+        
+        # Entferne Slashes die bei der Kodierung hinzugefügt wurden
+        encoded = encoded.replace("/", "")
+        
+        # Füge Base64-Padding hinzu falls nötig
+        missing_padding = len(encoded) % 4
+        if missing_padding:
+            encoded += '=' * (4 - missing_padding)
+        
+        # Dekodiere
+        decoded = base64.b64decode(encoded).decode('utf-8')
+        
+        # Extrahiere echte URL aus "service=images&src=URL_ENCODED&..."
+        if "src=" in decoded:
+            match = re.search(r'src=([^&]+)', decoded)
+            if match:
+                url_encoded = match.group(1)
+                real_url = urllib.parse.unquote(url_encoded)
+                return real_url
+    except Exception as e:
+        print(f"[DEBUG] Failed to decode phastpress URL: {e}")
+    
+    return phast_url
+
 def _norm(s: str) -> str:
     """Normalisiere String"""
     if not s:
@@ -381,6 +427,13 @@ def collect_detail_links_with_images() -> List[tuple]:
                 # Mache URL absolut
                 if image_url and not image_url.startswith("http"):
                     image_url = urljoin(BASE, image_url)
+                
+                # Dekodiere phastpress-URL
+                if image_url and "phastpress" in image_url:
+                    decoded_url = decode_phastpress_url(image_url)
+                    if decoded_url != image_url:
+                        print(f"[DEBUG]   Decoded phastpress URL")
+                        image_url = decoded_url
             
             # Debug-Output
             slug = full_url.split("/")[-2] if "/" in full_url else "unknown"
