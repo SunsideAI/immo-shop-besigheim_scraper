@@ -324,9 +324,25 @@ def collect_detail_links_with_images() -> List[tuple]:
         
         page_data = []
         
-        # Suche nach Immobilien-Artikeln (frymo-listing-item)
-        # Struktur: <article><a href=...></a><div><img></div></article>
-        for article in soup.find_all("article", class_=lambda x: x and "frymo-listing-item" in x):
+        # Suche nach Immobilien-Artikeln
+        # Verschiedene Ansätze probieren
+        articles = []
+        
+        # Ansatz 1: Suche nach class="frymo-listing-item"
+        articles = soup.find_all("article", class_="frymo-listing-item")
+        
+        if not articles:
+            # Ansatz 2: Suche nach article mit beliebiger class die "frymo" enthält
+            articles = soup.find_all("article", class_=lambda x: x and "frymo" in str(x).lower())
+        
+        if not articles:
+            # Ansatz 3: Alle articles, dann filtern
+            all_articles = soup.find_all("article")
+            articles = [a for a in all_articles if a.find("a", href=lambda h: h and "/immobilie/" in h)]
+        
+        print(f"[DEBUG] Gefunden: {len(articles)} Artikel-Elemente")
+        
+        for article in articles:
             # Suche Link im Artikel
             link = article.find("a", href=True)
             if not link:
@@ -340,7 +356,7 @@ def collect_detail_links_with_images() -> List[tuple]:
             
             full_url = urljoin(BASE, href)
             
-            # Suche Bild im gleichen Artikel (NICHT im Link!)
+            # Suche Bild im gleichen Artikel
             image_url = ""
             img = article.find("img")
             if img:
@@ -365,6 +381,11 @@ def collect_detail_links_with_images() -> List[tuple]:
                 # Mache URL absolut
                 if image_url and not image_url.startswith("http"):
                     image_url = urljoin(BASE, image_url)
+            
+            # Debug-Output
+            slug = full_url.split("/")[-2] if "/" in full_url else "unknown"
+            img_status = "✅" if image_url else "❌"
+            print(f"[DEBUG]   {slug[:40]:<40} | Image: {img_status}")
             
             # Nur hinzufügen wenn noch nicht vorhanden
             if not any(data[0] == full_url for data in all_data):
