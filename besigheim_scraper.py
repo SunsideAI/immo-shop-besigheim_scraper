@@ -12,6 +12,7 @@ import sys
 import csv
 import json
 import time
+import base64
 import urllib.parse
 from urllib.parse import urljoin, urlparse
 from typing import List, Dict, Optional
@@ -403,51 +404,70 @@ def parse_detail(detail_url: str) -> dict:
     # Bild-URL - erstes Property-Bild (nicht Logo)
     image_url = ""
     
-    # Methode 1: Suche in srcset (phastpress optimierte Bilder)
-    for img in soup.find_all("img"):
-        srcset = img.get("srcset", "")
-        if srcset and "wp-content/uploads" in srcset:
-            # Parse srcset: "url1 1920w, url2 768w, ..."
-            # Nimm die größte Auflösung (höchste w-Zahl)
-            urls = []
-            for part in srcset.split(","):
-                part = part.strip()
-                if " " in part:
-                    url_part = part.split()[0]
-                    if "logo" not in url_part.lower():
-                        urls.append(url_part)
-            
-            if urls:
-                # Nimm erste URL (meist höchste Auflösung)
-                image_url = urls[0] if urls[0].startswith("http") else urljoin(BASE, urls[0])
-                print(f"[DEBUG] Found image in srcset: {image_url[:80]}...")
-                break
+    # Phastpress verschlüsselt URLs in Base64
+    # Format: /phastpress/phast.php/BASE64_ENCODED_DATA
+    # Dekodiert enthält es die echte URL
     
-    # Methode 2: Fallback zu src Attribut
-    if not image_url:
-        for img in soup.find_all("img"):
-            src = img.get("src", "")
-            if src and "/wp-content/uploads/" in src:
-                # Ignoriere Logos und kleine Icons
-                if "logo" not in src.lower():
-                    # Dekodiere phastpress URL falls nötig
-                    if "phastpress" in src:
-                        # Extrahiere die echte URL aus dem phastpress Path
-                        import urllib.parse
-                        if "src=" in src:
-                            try:
-                                decoded = urllib.parse.unquote(src)
-                                match = re.search(r'src=(https?://[^&]+)', decoded)
-                                if match:
-                                    image_url = match.group(1)
-                            except:
-                                pass
-                    else:
-                        image_url = src if src.startswith("http") else urljoin(BASE, src)
+    import base64
+    
+    for img in soup.find_all("img"):
+        src = img.get("src", "")
+        alt = img.get("alt", "")
+        width = img.get("width", "")
+        
+        # Filtere unwichtige Bilder
+        if not src:
+            continue
+        
+        # Ignoriere sehr kleine Bilder (Icons, Logos)
+        try:
+            if width and int(width) < 200:
+                continue
+        except:
+            pass
+        
+        # Prüfe ob es ein phastpress-Link ist
+        if "phastpress/phast.php" in src:
+            # Extrahiere Base64-Teil
+            parts = src.split("/phast.php/")
+            if len(parts) > 1:
+                encoded = parts[1]
+                # Entferne Query-Parameter und Suffix wie .q.jpg
+                encoded = encoded.split("?")[0]
+                encoded = re.sub(r'\.(q|webp|jpg|jpeg|png)$', '', encoded, flags=re.IGNORECASE)
+                
+                try:
+                    # Dekodiere Base64
+                    # Füge Padding hinzu falls nötig
+                    missing_padding = len(encoded) % 4
+                    if missing_padding:
+                        encoded += '=' * (4 - missing_padding)
                     
-                    if image_url:
-                        print(f"[DEBUG] Found image in src: {image_url[:80]}...")
-                        break
+                    decoded = base64.b64decode(encoded).decode('utf-8')
+                    
+                    # Suche nach der echten URL im dekodierten String
+                    # Format: "service=images&src=https%3A%2F%2Fwww.immo-shop-besigheim.de%2Fwp-content%2Fuploads%2F..."
+                    if "src=" in decoded:
+                        import urllib.parse
+                        match = re.search(r'src=([^&]+)', decoded)
+                        if match:
+                            encoded_url = match.group(1)
+                            real_url = urllib.parse.unquote(encoded_url)
+                            
+                            # Prüfe ob es ein Property-Bild ist
+                            if "wp-content/uploads" in real_url and "logo" not in real_url.lower():
+                                image_url = real_url
+                                print(f"[DEBUG] Found image (decoded): {image_url[:80]}...")
+                                break
+                except Exception as e:
+                    print(f"[DEBUG] Failed to decode phastpress URL: {e}")
+                    continue
+        
+        # Fallback: Direkte wp-content URLs (falls phastpress deaktiviert)
+        elif "wp-content/uploads" in src and "logo" not in src.lower():
+            image_url = src if src.startswith("http") else urljoin(BASE, src)
+            print(f"[DEBUG] Found image (direct): {image_url[:80]}...")
+            break
     
     if not image_url:
         print(f"[DEBUG] No suitable image found for {detail_url}")
