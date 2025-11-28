@@ -659,6 +659,10 @@ def run():
                 rec_id, old = existing[k]
                 diff = {fld: val for fld, val in fields.items() if old.get(fld) != val}
                 if diff:
+                    print(f"[DEBUG] Update needed for {k[:30]}: {list(diff.keys())}")
+                    if "Bild" in diff:
+                        print(f"[DEBUG]   Old Bild: {old.get('Bild', 'MISSING')[:80]}")
+                        print(f"[DEBUG]   New Bild: {diff['Bild'][:80]}")
                     to_update.append({"id": rec_id, "fields": diff})
                 keep.add(k)
             else:
